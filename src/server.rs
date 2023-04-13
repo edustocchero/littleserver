@@ -1,5 +1,6 @@
-use std::io::{BufRead, BufReader, Error, Read};
-use std::net::{TcpListener, ToSocketAddrs};
+use std::fs;
+use std::io::{BufRead, BufReader, Error, Read, Write};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 
 #[derive(Debug)]
 pub struct Server {
@@ -31,7 +32,52 @@ impl Server {
             let mut first_line: String = String::new();
             reader.read_line(&mut first_line).expect("Could read the first line");
 
-            println!("First line: {:?}", first_line);
+            let request: Request = Request::new(&first_line);
+            println!("Request state: {:?}", request);
+
+            Server::respond(request, &mut stream);
         }
+    }
+
+    fn respond(request: Request, stream: &mut TcpStream) {
+        match request.method {
+            Method::GET => stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n"),
+            Method::POST => stream.write_all(b"HTTP/1.1 204 No Content\r\n\r\n"),
+            Method::OTHER => stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\n\r\n"),
+        }.expect("Processes the request");
+    }
+}
+
+#[derive(Debug)]
+enum Method {
+    GET,
+    POST,
+    OTHER,
+}
+
+impl Method {
+    fn from_string(s: &str) -> Method {
+        match s {
+            "GET" => Method::GET,
+            "POST" => Method::POST,
+            _ => Method::OTHER
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Request<'a> {
+    method: Method,
+    path: &'a str,
+}
+
+impl<'a> Request<'a> {
+    fn new(src: &'a String) -> Request<'a> {
+        let mut iter = src.split_whitespace();
+
+        let method = Method::from_string(iter.next().expect("Has method"));
+        let path = iter.next().expect("Has path");
+
+        Request { method, path }
     }
 }
