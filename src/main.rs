@@ -1,6 +1,5 @@
 mod server;
 
-use std::process::exit;
 use crate::server::Server;
 
 fn main() {
@@ -17,6 +16,5 @@ fn main() {
     };
 
     println!("Server state: {:?}", server);
-
-    drop(server);
+    server.listen();
 }
