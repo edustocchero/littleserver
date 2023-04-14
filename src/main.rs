@@ -1,20 +1,28 @@
 mod server;
 
-use crate::server::Server;
+use std::fs;
+use std::sync::{Arc};
+use std::net::TcpListener;
+use std::collections::HashMap;
 
 fn main() {
     println!("Hello, world!");
 
-    let server_result: Result<Server, _> = Server::new("127.0.0.1:80");
+    let mut resource_map: HashMap<String, String> = HashMap::new();
+    let resource_path = fs::read_dir("./resources").unwrap();
 
-    let server = match server_result {
-        Ok(server) => {
-            println!("Server created successfully!");
-            server
-        },
-        Err(e) => panic!("Could not create server: {:?}", e)
-    };
+    resource_path.for_each(|resource| {
+        let path = resource.unwrap().path();
+        if path.is_file() {
+            let contents = fs::read_to_string(path.clone()).unwrap();
+            let name = path.file_name().unwrap().to_str().unwrap().to_string();
+            resource_map.insert(format!("/{name}"), contents);
+        }
+    });
 
-    println!("Server state: {:?}", server);
-    server.listen();
+    let listener = TcpListener::bind("localhost:80").unwrap();
+
+    let resources = Arc::new(resource_map);
+
+    server::listen(&listener, resources);
 }
