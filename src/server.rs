@@ -1,20 +1,60 @@
-use std::{thread};
-use std::sync::{Arc};
+use std::{fs, thread};
+use std::sync::Arc;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream};
+use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
+use crate::request::Request;
 
-const NOT_FOUND_RESPONSE: &[u8; 63] = b"HTTP/1.1 404 Not Found\r\nContent-Length: 17\r\n\r\nContent not found";
-const INTERNAL_SERVER_ERROR_RESPONSE: &[u8; 38] = b"HTTP/1.1 500 Internal Server Error\r\n\r\n";
+static NOT_FOUND_RESPONSE: &[u8; 63] = b"HTTP/1.1 404 Not Found\r\nContent-Length: 17\r\n\r\nContent not found";
+static INTERNAL_SERVER_ERROR_RESPONSE: &[u8; 38] = b"HTTP/1.1 500 Internal Server Error\r\n\r\n";
 
-pub fn listen(listener: &TcpListener, resources: Arc<HashMap<String, String>>) {
-    for result in listener.incoming() {
-        match result {
-            Ok(mut stream) => {
-                let resources = Arc::clone(&resources);
-                thread::spawn(move || handle_stream(&mut stream, resources));
+pub struct Server {
+    listener: TcpListener,
+    mappings: Arc<HashMap<String, String>>,
+}
+
+impl Server {
+    pub fn new<A: ToSocketAddrs>(addr: A, resource_path: &str) -> Server {
+        let listener = match TcpListener::bind(addr) {
+            Ok(tcp_listener) => tcp_listener,
+            Err(e) => panic!("Could not bind: {:?}", e)
+        };
+
+        let mut resource_map: HashMap<String, String> = HashMap::new();
+        let resources = match fs::read_dir(resource_path) {
+            Ok(dir) => dir,
+            Err(e) => panic!("Could not read dir: {:?}", e)
+        };
+
+        resources.for_each(|resource| {
+            let path = resource.unwrap().path();
+            if path.is_file() {
+                let name = path.file_name().unwrap().to_str().unwrap().to_string();
+                println!("Found: {:?}", name);
+                let contents = fs::read_to_string(path).unwrap();
+                if name.eq("index.html") {
+                    resource_map.insert("/".to_string(), contents.clone());
+                }
+                resource_map.insert(format!("/{name}"), contents.clone());
             }
-            Err(e) => panic!("Could not accept: {:?}", e)
+        });
+
+        let mappings = Arc::new(resource_map);
+
+        Server { listener, mappings }
+    }
+
+    pub fn listen(&mut self) {
+        println!("Listening on {:?}", self.listener.local_addr().unwrap());
+        for result in self.listener.incoming() {
+            match result {
+                Ok(mut stream) => {
+                    println!("New connection: {addr}", addr = stream.peer_addr().unwrap());
+                    let resources = Arc::clone(&self.mappings);
+                    thread::spawn(move || handle_stream(&mut stream, resources))
+                }
+                Err(e) => panic!("Could not listen: {:?}", e)
+            };
         }
     }
 }
@@ -29,7 +69,7 @@ fn handle_stream(stream: &mut TcpStream, resources: Arc<HashMap<String, String>>
 
     if !(bytes_read > 0) {
         write_internal_server_error(stream);
-        return
+        return;
     }
 
     let mut reader = BufReader::new(&buffer[..bytes_read]);
@@ -59,38 +99,4 @@ fn write_not_found(stream: &mut TcpStream) {
 fn write_internal_server_error(stream: &mut TcpStream) {
     stream.write_all(INTERNAL_SERVER_ERROR_RESPONSE).unwrap();
     stream.shutdown(Shutdown::Both).unwrap();
-}
-
-#[derive(Debug, Clone)]
-enum Method {
-    GET,
-    POST,
-    OTHER,
-}
-
-impl Method {
-    fn from_string(s: &str) -> Method {
-        match s {
-            "GET" => Method::GET,
-            "POST" => Method::POST,
-            _ => Method::OTHER
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct Request {
-    method: Method,
-    path: String,
-}
-
-impl Request {
-    fn new(src: String) -> Request {
-        let mut iter = src.split_whitespace();
-
-        let method = Method::from_string(iter.next().expect("Has method"));
-        let path = iter.next().expect("Has path").to_string();
-
-        Request { method, path }
-    }
 }
