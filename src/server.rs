@@ -1,4 +1,4 @@
-use std::{fs, thread};
+use std::{fs, thread, time};
 use std::sync::Arc;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -30,16 +30,17 @@ impl Server {
             let path = resource.unwrap().path();
             if path.is_file() {
                 let name = path.file_name().unwrap().to_str().unwrap().to_string();
-                println!("Found: {:?}", name);
                 let contents = fs::read_to_string(path).unwrap();
+                println!("Found: {:?}", &name);
+                println!("{:?} size: {:?}", &name, contents.len());
                 if name.eq("index.html") {
                     resource_map.insert("/".to_string(), contents.clone());
                 }
-                resource_map.insert(format!("/{name}"), contents.clone());
+                resource_map.insert(format!("/{name}"), contents);
             }
         });
 
-        let mappings = Arc::new(resource_map);
+        let mappings: Arc<HashMap<String, String>> = Arc::new(resource_map);
 
         Server { listener, mappings }
     }
@@ -51,7 +52,7 @@ impl Server {
                 Ok(mut stream) => {
                     println!("New connection: {addr}", addr = stream.peer_addr().unwrap());
                     let resources = Arc::clone(&self.mappings);
-                    thread::spawn(move || handle_stream(&mut stream, resources))
+                    thread::spawn(move || handle_stream(&mut stream, &resources));
                 }
                 Err(e) => panic!("Could not listen: {:?}", e)
             };
@@ -59,8 +60,8 @@ impl Server {
     }
 }
 
-fn handle_stream(stream: &mut TcpStream, resources: Arc<HashMap<String, String>>) {
-    let mut buffer: [u8; 1024] = [0; 1024];
+fn handle_stream(stream: &mut TcpStream, resources: &Arc<HashMap<String, String>>) {
+    let mut buffer: [u8; 4096] = [0; 4096];
 
     let bytes_read = match stream.read(&mut buffer) {
         Ok(len) => len,
@@ -68,14 +69,10 @@ fn handle_stream(stream: &mut TcpStream, resources: Arc<HashMap<String, String>>
     };
 
     if !(bytes_read > 0) {
-        write_internal_server_error(stream);
         return;
     }
 
-    let mut reader = BufReader::new(&buffer[..bytes_read]);
-    let mut first_line: String = String::new();
-    reader.read_line(&mut first_line).expect("Could read the first line");
-    let request: Request = Request::new(first_line);
+    let request = Request::from_bytes(&buffer[..bytes_read]);
 
     if resources.contains_key(&request.path) {
         let content = resources.get(&request.path).unwrap();
